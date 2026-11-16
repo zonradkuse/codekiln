@@ -1,0 +1,16 @@
+# Stacks one language layer on top of an existing codekiln image.
+# Used by `codekiln build <layers...>`; the build context is the directory that
+# holds the layer script.
+ARG FROM_IMAGE=codekiln:base
+FROM ${FROM_IMAGE}
+
+ARG LAYER
+ARG DEBIAN_FRONTEND=noninteractive
+
+COPY ${LAYER}.sh /usr/local/share/codekiln/layers/${LAYER}.sh
+
+USER root
+RUN bash -euo pipefail -c '. "/usr/local/share/codekiln/layers/${LAYER}.sh"; as_root; rm -rf /var/lib/apt/lists/*'
+
+USER ubuntu
+RUN bash -euo pipefail -c '. "/usr/local/share/codekiln/layers/${LAYER}.sh"; as_user'

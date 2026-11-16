@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# codekiln: sandboxed dev containers for coding agents.
+#
+#   codekiln layers                      list available language layers
+#   codekiln build   [layers...] [docker build args]
+#                                         build the base image, plus one image with
+#                                         the given layers stacked on top
+#   codekiln rebuild [docker build args] rebuild the base and every stack you have built
+#   codekiln init    [dir] [layers...]   write the dev container config into a project
+#                                         (run again with other layers to switch stacks)
+#   codekiln open    [dir] [layers...]   init if needed, then open the project in VS Code
+#   codekiln images                      list built images
+#   codekiln update                      pull the latest codekiln (then: codekiln rebuild)
+#   codekiln paths                       show where codekiln keeps its files
+#
+# Examples:  codekiln build cpp arm mingw      codekiln open ~/code/app ts python
+# A name that matches a layer is a layer; write ./name for a directory of that name.
+set -euo pipefail
+
+# Locate the checkout this script belongs to, following symlinks (~/.local/bin).
+self="${BASH_SOURCE[0]}"
+while [[ -L $self ]]; do
+  here="$(cd -P "$(dirname "$self")" && pwd)"
+  self="$(readlink "$self")"
+  [[ $self == /* ]] || self="$here/$self"
+done
+ROOT="${CODEKILN_HOME:-$(cd -P "$(dirname "$self")/.." && pwd)}"
+
+# Your own files live outside the checkout, so `update` never touches them.
+CONFIG_DIR="${CODEKILN_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/codekiln}"
+SKILLS_DIR="${CODEKILN_SKILLS:-$CONFIG_DIR/skills}"
+USER_LAYERS="$CONFIG_DIR/layers"
+
+IMAGE="codekiln"
+LEGACY_IMAGE="claude-devcontainer"   # configs written before the rename
+
+die() { echo "codekiln: $*" >&2; exit 1; }
+
+# Path of a layer script; your own layers win over the bundled ones.
+layer_file() {
+  if [[ -f $USER_LAYERS/$1.sh ]]; then echo "$USER_LAYERS/$1.sh"
+  elif [[ -f $ROOT/layers/$1.sh ]]; then echo "$ROOT/layers/$1.sh"
+  else return 1
+  fi
+}
+
+available_layers() {
+  local f
+  for f in "$ROOT"/layers/*.sh "$USER_LAYERS"/*.sh; do
+    [[ -e $f ]] && basename "$f" .sh
+  done | sort -u
+}
+
+# Splits arguments into LAYERS (sorted, unique), DIR and DOCKER_ARGS.
+parse_args() {
+  LAYERS=(); DIR=""; DOCKER_ARGS=()
+  local a
+  for a in "$@"; do
+    if [[ $a == -* ]]; then
+      DOCKER_ARGS+=("$a")
+    elif layer_file "$a" >/dev/null; then
+      LAYERS+=("$a")
+    elif [[ -d $a ]]; then
+      [[ -z $DIR ]] || die "more than one directory given: $DIR and $a"
+      DIR="$a"
+    else
+      die "'$a' is neither a layer nor a directory (layers: $(available_layers | tr '\n' ' '))"
+    fi
+  done
+  if [[ ${#LAYERS[@]} -gt 0 ]]; then
+    mapfile -t LAYERS < <(printf '%s\n' "${LAYERS[@]}" | sort -u)
+  fi
+}
+
+# Image tag for a set of layers: "base", or the sorted names joined with "_".
+tag_for() {
+  if [[ $# -eq 0 ]]; then echo "base"; else local IFS=_; echo "$*"; fi
+}
+
+build_base() {
+  docker build --pull -t "$IMAGE:base" "$@" "$ROOT/image"
+}
+
+# build_stack <layers...>   (docker args come from DOCKER_ARGS)
+# Builds one image per prefix (cpp, cpp_ts, ...) so stacks share layers.
+build_stack() {
+  local prev="base" acc=() layer tag file
+  for layer in "$@"; do
+    acc+=("$layer")
+    tag="$(tag_for "${acc[@]}")"
+    file="$(layer_file "$layer")"
+    echo "==> $IMAGE:$tag"
+    docker build -f "$ROOT/image/Dockerfile.layer" \
+      --build-arg "FROM_IMAGE=$IMAGE:$prev" --build-arg "LAYER=$layer" \
+      -t "$IMAGE:$tag" ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"} "$(dirname "$file")"
+    prev="$tag"
+  done
+}
+
+cmd_layers() {
+  local name file origin
+  for name in $(available_layers); do
+    file="$(layer_file "$name")"
+    origin=""; [[ $file == "$USER_LAYERS"/* ]] && origin=" (yours)"
+    printf '%-10s %s%s\n' "$name" "$(sed -n '1s/^# *//p' "$file")" "$origin"
+  done
+}
+
+cmd_build() {
+  parse_args "$@"
+  [[ -z $DIR ]] || die "build takes layer names, not a directory"
+  build_base ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}
+  build_stack ${LAYERS[@]+"${LAYERS[@]}"}
+  echo "built $IMAGE:$(tag_for ${LAYERS[@]+"${LAYERS[@]}"})"
+}
+
+cmd_rebuild() {
+  parse_args "$@"
+  [[ -z $DIR && ${#LAYERS[@]} -eq 0 ]] || die "rebuild takes only docker build args"
+  local tags tag layers l ok
+  mapfile -t tags < <(docker images --format '{{.Tag}}' "$IMAGE" | grep -vxE 'base|<none>' | sort -u || true)
+  build_base ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}
+  for tag in ${tags[@]+"${tags[@]}"}; do
+    IFS=_ read -r -a layers <<<"$tag"
+    ok=1
+    for l in "${layers[@]}"; do
+      layer_file "$l" >/dev/null || { echo "skipping $IMAGE:$tag (no layer '$l')" >&2; ok=0; }
+    done
+    [[ $ok -eq 1 ]] && build_stack "${layers[@]}"
+  done
+}
+
+# Tag currently configured in a project, or empty.
+configured_tag() {
+  sed -n -E "s/.*\"image\": *\"($IMAGE|$LEGACY_IMAGE):([^\"]*)\".*/\2/p" "$1" 2>/dev/null | head -n1
+}
+
+cmd_init() {
+  parse_args "$@"
+  [[ ${#DOCKER_ARGS[@]} -eq 0 ]] || die "unknown option: ${DOCKER_ARGS[0]}"
+  local dir; dir="$(cd "${DIR:-.}" && pwd)"
+  local target="$dir/.devcontainer/devcontainer.json"
+  local tag; tag="$(tag_for ${LAYERS[@]+"${LAYERS[@]}"})"
+
+  [[ ! -e $dir/.devcontainer.json ]] || die "$dir has its own .devcontainer.json - not touching it"
+  if [[ -e $target ]]; then
+    local current; current="$(configured_tag "$target")"
+    [[ -n $current ]] || die "$target was not created by codekiln - not overwriting"
+    # No layers given: keep the stack the project already uses.
+    if [[ ${#LAYERS[@]} -eq 0 ]]; then
+      tag="$current"; [[ $tag == latest ]] && tag="base"
+    fi
+  fi
+
+  mkdir -p "$dir/.devcontainer" "$SKILLS_DIR"
+  local content; content="$(<"$ROOT/templates/devcontainer.json")"
+  local skills_escaped="${SKILLS_DIR//&/\\&}"
+  content="${content//__IMAGE__/$IMAGE:$tag}"
+  content="${content//__SKILLS_DIR__/$skills_escaped}"
+  printf '%s\n' "$content" >"$target"
+  echo "wrote $target (image $IMAGE:$tag)"
+
+  # Keep it out of the project's history without touching its .gitignore.
+  if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+    local exclude; exclude="$(git -C "$dir" rev-parse --git-path info/exclude)"
+    [[ $exclude == /* ]] || exclude="$dir/$exclude"
+    mkdir -p "$(dirname "$exclude")"
+    if ! grep -qxF ".devcontainer/" "$exclude" 2>/dev/null; then
+      echo ".devcontainer/" >>"$exclude"
+    fi
+  fi
+
+  if ! docker image inspect "$IMAGE:$tag" >/dev/null 2>&1; then
+    local hint="codekiln build"
+    [[ $tag == base ]] || hint+=" ${tag//_/ }"
+    echo "note: $IMAGE:$tag is not built yet - run: $hint"
+  fi
+}
+
+cmd_open() {
+  parse_args "$@"
+  local dir; dir="$(cd "${DIR:-.}" && pwd)"
+  local target="$dir/.devcontainer/devcontainer.json"
+  if [[ ! -e $target || ${#LAYERS[@]} -gt 0 ]] || ! grep -q "\"$IMAGE:" "$target"; then
+    cmd_init "$@"
+  fi
+  local tag; tag="$(configured_tag "$target")"
+  docker image inspect "$IMAGE:$tag" >/dev/null 2>&1 \
+    || die "$IMAGE:$tag is not built yet - see the note above or run: codekiln build"
+  command -v code >/dev/null || die "'code' not on PATH - open $dir in VS Code manually"
+  code "$dir"
+  echo "In VS Code: 'Reopen in Container' (after switching stacks: 'Rebuild Container')"
+}
+
+cmd_update() {
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || die "$ROOT is not a git checkout"
+  git -C "$ROOT" pull --ff-only
+  echo "now run: codekiln rebuild"
+}
+
+cmd_paths() {
+  printf '%-14s %s\n' "program" "$ROOT" "your layers" "$USER_LAYERS" "your skills" "$SKILLS_DIR"
+}
+
+case "${1:-}" in
+  layers)  shift; cmd_layers ;;
+  build)   shift; cmd_build "$@" ;;
+  rebuild) shift; cmd_rebuild "$@" ;;
+  init)    shift; cmd_init "$@" ;;
+  open)    shift; cmd_open "$@" ;;
+  images)  docker images "$IMAGE" ;;
+  update)  cmd_update ;;
+  paths)   cmd_paths ;;
+  *)       sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

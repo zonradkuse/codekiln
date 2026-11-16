@@ -1,0 +1,70 @@
+# Outbound allowlist (HTTPS/443 only). One domain per line, '#' starts a comment.
+# Baked into the image: rebuild after editing (codekiln rebuild).
+# Hosts are resolved to IPs when the container starts; if one stops responding
+# later, refresh with: sudo /usr/local/sbin/egress-firewall
+
+# --- Claude Code itself (API, login, token refresh). Required. ---------------
+api.anthropic.com
+claude.ai
+platform.claude.com
+
+# --- Public git hosting --------------------------------------------------------
+# github.com additionally pulls GitHub's published IP ranges (web/api/git).
+github.com
+gitlab.com
+bitbucket.org
+codeberg.org
+# GitHub download hosts (release assets, tarballs, raw files) - many package
+# installers fetch prebuilt binaries or sources from these.
+codeload.github.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com
+raw.githubusercontent.com
+
+# --- JavaScript ----------------------------------------------------------------
+registry.npmjs.org
+registry.yarnpkg.com
+nodejs.org
+
+# --- Python --------------------------------------------------------------------
+pypi.org
+files.pythonhosted.org
+conda.anaconda.org
+repo.anaconda.com
+
+# --- Java / Kotlin / Android ---------------------------------------------------
+repo1.maven.org
+repo.maven.apache.org
+plugins.gradle.org
+plugins-artifacts.gradle.org
+services.gradle.org
+downloads.gradle.org
+maven.google.com
+dl.google.com
+jitpack.io
+
+# --- Rust ----------------------------------------------------------------------
+crates.io
+index.crates.io
+static.crates.io
+static.rust-lang.org
+sh.rustup.rs
+
+# --- Go ------------------------------------------------------------------------
+proxy.golang.org
+sum.golang.org
+go.dev
+
+# --- Ruby / PHP / .NET ---------------------------------------------------------
+rubygems.org
+index.rubygems.org
+repo.packagist.org
+packagist.org
+api.nuget.org
+
+# --- Elixir / Dart / Haskell / Perl -------------------------------------------
+repo.hex.pm
+builds.hex.pm
+pub.dev
+hackage.haskell.org
+cpan.metacpan.org
