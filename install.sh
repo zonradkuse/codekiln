@@ -38,7 +38,6 @@ main() {
     repo="$(git -C "$src_dir" remote get-url origin 2>/dev/null || true)"
   fi
   repo="${repo:-$DEFAULT_REPO}"
-  [[ $repo != *"/zonradkuse/"* ]] || die "no repository URL: set DEFAULT_REPO in install.sh or export CODEKILN_REPO"
 
   # --- program ----------------------------------------------------------------
   if [[ -d $dest/.git ]]; then
