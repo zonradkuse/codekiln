@@ -39,6 +39,12 @@ This is pair programming. The user is the navigator: they own the design decisio
 - Before saying something works, run it. If you could not run or test it, say so and explain what remains unverified.
 - Do not weaken, skip or delete a test to make it pass. Report failures.
 
+## Second opinion
+- Consult a larger, suitable model for a second opinion: before proposing a plan for a non-trivial change, when stuck after two failed attempts, and before reporting a complex change as done.
+- Give it the task and the relevant code, not your conclusion, so it does not just confirm you.
+- Tell the user what it said, especially where it disagrees with you. The user decides.
+- Only use what the harness provides. Never call model APIs or other agent tools yourself.
+
 ## Git
 
 Do NOT commit. Do NOT push.
