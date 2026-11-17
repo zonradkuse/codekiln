@@ -36,10 +36,13 @@ This installs for your user only, without sudo:
 |---|---|
 | program (a git clone) | `~/.local/share/codekiln` |
 | command | `~/.local/bin/codekiln` (symlink) |
-| your skills, layers and allowlist | `~/.config/codekiln/` |
+| your skills, layers, allowlist and guideline profiles | `~/.config/codekiln/` |
 
 It adds `~/.local/bin` to your `PATH` if it is missing; append
-`-s -- --no-modify-path` after `bash` to skip that. Running it again updates the
+`-s -- --no-modify-path` after `bash` to skip that. To make the opinionated
+coding guidelines the default for new projects (see
+[Coding guidelines](#coding-guidelines)), append `-s -- --profile coding`.
+Running it again updates the
 install, as does `codekiln update`. If you would rather read the script first,
 clone the repository and run `./install.sh` from the checkout.
 
@@ -65,6 +68,7 @@ extension marketplace, so the host has to download extensions for it:
 ```bash
 codekiln open ~/code/some-project          # base image
 codekiln open ~/code/firmware cpp arm-none # base + layers
+codekiln open ~/code/app ts --profile coding  # with coding guidelines
 ```
 
 This writes `.devcontainer/devcontainer.json` into the project, hides it from
@@ -77,11 +81,16 @@ shared by all projects.
 | `codekiln layers` | list the available language layers |
 | `codekiln build [layers...]` | build the base image and one image with the layers stacked on it |
 | `codekiln rebuild` | rebuild the base and every stack you have built |
-| `codekiln init [dir] [layers...]` | write or regenerate a project's config; run again with other layers to switch |
-| `codekiln open [dir] [layers...]` | init if needed, then open VS Code |
+| `codekiln init [dir] [layers...] [--profile <name\|none>]` | write or regenerate a project's config; run again with other layers or another profile to switch |
+| `codekiln open [dir] [layers...] [--profile <name\|none>]` | init if needed, then open VS Code |
 | `codekiln images` | list built images |
 | `codekiln allow [hosts...]` | allow HTTPS to more hosts; without arguments, list yours |
 | `codekiln disallow <hosts...>` | remove hosts you allowed |
+| `codekiln profile [list]` | list guideline profiles, bundled and yours |
+| `codekiln profile install <name> [--force]` | copy a bundled profile to yours |
+| `codekiln profile new <name> [--from <profile>]` | start your own profile, empty or as a copy |
+| `codekiln profile default [name\|none]` | show or set the profile new projects get |
+| `codekiln profile show [name]` | print a profile |
 | `codekiln update` | pull the latest codekiln |
 | `codekiln paths` | show where codekiln keeps its files |
 
@@ -148,6 +157,52 @@ since the firewall works on the addresses a name resolves to. List each
 subdomain you need. Projects set up before this feature need
 `codekiln init` (or `codekiln open`, which does it for you) and "Rebuild
 Container", and the image needs one `codekiln rebuild`.
+
+## Coding guidelines
+
+codekiln is not tied to coding, so projects get no coding rules unless you
+choose a profile. A profile is a folder with one `AGENTS.md`, and each
+project picks one:
+
+```bash
+codekiln init ~/code/app --profile coding    # opinionated coding guidelines
+codekiln init ~/code/notes --profile none    # none for this project
+codekiln profile default coding              # what new projects get without --profile
+```
+
+The first use of a bundled profile copies it, for example
+[`profiles/coding/AGENTS.md`](profiles/coding/AGENTS.md), to
+`~/.config/codekiln/profiles/coding/AGENTS.md`. That copy is yours: edit it to
+your own guidelines, and keep the folder in git if you like. Updates never
+overwrite it, and `profile install coding --force` refreshes it from the
+bundled version, keeping yours as `AGENTS.md.bak`.
+
+For a project that needs different rules, make your own profile:
+
+```bash
+codekiln profile new firmware --from coding  # or without --from for an empty one
+$EDITOR ~/.config/codekiln/profiles/firmware/AGENTS.md
+codekiln init ~/code/firmware --profile firmware
+```
+
+The project's choice is stored in its generated `devcontainer.json`.
+Re-running `init` without `--profile` keeps it, and changing the default
+doesn't affect existing projects. After switching, use "Rebuild Container".
+Edits to a profile's `AGENTS.md` show up in new sessions without a rebuild.
+
+The chosen profile is mounted read-only at `/etc/codekiln/guidelines/`. The
+file is plain `AGENTS.md`, so it is not tied to one harness:
+
+- **Claude Code** gets it through an `@import` at the end of the managed
+  rules (`image/agent-rules.md`), from new sessions on. Run `/memory` in a
+  container to confirm that `/etc/codekiln/guidelines/AGENTS.md` is listed.
+- **Other harnesses** can point their global instructions file at the same
+  path.
+
+Nothing is written into your projects. A project's own `AGENTS.md` or
+`CLAUDE.md` still loads, and the guidelines tell the agent to follow the
+project's instructions where the two disagree. The sandbox rules still come
+first.
 
 ## What is restricted
 

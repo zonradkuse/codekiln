@@ -6,18 +6,26 @@
 #                                         build the base image, plus one image with
 #                                         the given layers stacked on top
 #   codekiln rebuild [docker build args] rebuild the base and every stack you have built
-#   codekiln init    [dir] [layers...]   write the dev container config into a project
-#                                         (run again with other layers to switch stacks)
-#   codekiln open    [dir] [layers...]   init if needed, then open the project in VS Code
+#   codekiln init    [dir] [layers...] [--profile <name|none>]
+#                                         write the dev container config into a project
+#                                         (run again with other layers/profile to switch)
+#   codekiln open    [dir] [layers...] [--profile <name|none>]
+#                                         init if needed, then open the project in VS Code
 #   codekiln images                      list built images
 #   codekiln allow   [hosts...]          allow HTTPS to more hosts (no args: list yours);
 #                                         applied to running containers right away
 #   codekiln disallow <hosts...>         remove hosts you allowed
+#   codekiln profile [list]              list guideline profiles (bundled and yours)
+#   codekiln profile install <name>      copy a bundled profile to yours (--force replaces it)
+#   codekiln profile new <name> [--from <profile>]
+#                                         start your own profile, empty or as a copy
+#   codekiln profile default [name|none] show or set the profile new projects get
+#   codekiln profile show [name]         print a profile (default: the default profile)
 #   codekiln update                      pull the latest codekiln (then: codekiln rebuild)
 #   codekiln paths                       show where codekiln keeps its files
 #
 # Examples:  codekiln build cpp arm mingw      codekiln open ~/code/app ts python
-#            codekiln allow api.example.com
+#            codekiln allow api.example.com    codekiln init ~/code/app --profile coding
 # A name that matches a layer is a layer; write ./name for a directory of that name.
 set -euo pipefail
 
@@ -36,7 +44,11 @@ SKILLS_DIR="${CODEKILN_SKILLS:-$CONFIG_DIR/skills}"
 USER_LAYERS="$CONFIG_DIR/layers"
 NETWORK_DIR="$CONFIG_DIR/network"          # mounted at /etc/codekiln/user
 ALLOWLIST="$NETWORK_DIR/allowlist.txt"
+USER_PROFILES="$CONFIG_DIR/profiles"       # <name>/AGENTS.md; a project's choice is
+                                           # mounted at /etc/codekiln/guidelines
+DEFAULT_PROFILE_FILE="$CONFIG_DIR/default-profile"
 BUNDLED_ALLOWLIST="$ROOT/image/egress-allowlist.txt"
+BUNDLED_PROFILES="$ROOT/profiles"
 
 # Bump together with the marker in templates/devcontainer.json when the template
 # changes, so `open` regenerates configs written by an older version.
@@ -63,12 +75,18 @@ available_layers() {
   done | sort -u
 }
 
-# Splits arguments into LAYERS (sorted, unique), DIR and DOCKER_ARGS.
+# Splits arguments into LAYERS (sorted, unique), DIR, PROFILE and DOCKER_ARGS.
 parse_args() {
-  LAYERS=(); DIR=""; DOCKER_ARGS=()
+  LAYERS=(); DIR=""; DOCKER_ARGS=(); PROFILE=""
   local a
-  for a in "$@"; do
-    if [[ $a == -* ]]; then
+  while [[ $# -gt 0 ]]; do
+    a="$1"; shift
+    if [[ $a == --profile ]]; then
+      [[ $# -gt 0 ]] || die "--profile needs a name (or none)"
+      PROFILE="$1"; shift
+    elif [[ $a == --profile=* ]]; then
+      PROFILE="${a#--profile=}"
+    elif [[ $a == -* ]]; then
       DOCKER_ARGS+=("$a")
     elif layer_file "$a" >/dev/null; then
       LAYERS+=("$a")
@@ -121,6 +139,7 @@ cmd_layers() {
 cmd_build() {
   parse_args "$@"
   [[ -z $DIR ]] || die "build takes layer names, not a directory"
+  [[ -z $PROFILE ]] || die "build does not take --profile (profiles are chosen per project: codekiln init --profile)"
   build_base ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}
   build_stack ${LAYERS[@]+"${LAYERS[@]}"}
   echo "built $IMAGE:$(tag_for ${LAYERS[@]+"${LAYERS[@]}"})"
@@ -128,7 +147,7 @@ cmd_build() {
 
 cmd_rebuild() {
   parse_args "$@"
-  [[ -z $DIR && ${#LAYERS[@]} -eq 0 ]] || die "rebuild takes only docker build args"
+  [[ -z $DIR && ${#LAYERS[@]} -eq 0 && -z $PROFILE ]] || die "rebuild takes only docker build args"
   local tags tag layers l ok
   mapfile -t tags < <(docker images --format '{{.Tag}}' "$IMAGE" | grep -vxE 'base|<none>' | sort -u || true)
   build_base ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}
@@ -158,6 +177,7 @@ cmd_init() {
   local tag; tag="$(tag_for ${LAYERS[@]+"${LAYERS[@]}"})"
 
   [[ ! -e $dir/.devcontainer.json ]] || die "$dir has its own .devcontainer.json - not touching it"
+  local profile="$PROFILE"
   if [[ -e $target ]]; then
     local current; current="$(configured_tag "$target")"
     [[ -n $current ]] || die "$target was not created by codekiln - not overwriting"
@@ -165,16 +185,29 @@ cmd_init() {
     if [[ ${#LAYERS[@]} -eq 0 ]]; then
       tag="$current"; [[ $tag == latest ]] && tag="base"
     fi
+    # No --profile given: keep the profile the project already uses.
+    [[ -n $profile ]] || profile="$(configured_profile "$target")"
   fi
+  [[ -n $profile ]] || profile="$(default_profile)"
+  [[ $profile == none ]] || ensure_profile "$profile"
 
-  mkdir -p "$dir/.devcontainer" "$SKILLS_DIR"
+  mkdir -p "$dir/.devcontainer" "$SKILLS_DIR" "$USER_PROFILES"
   ensure_allowlist
+
+  local mount
+  if [[ $profile == none ]]; then
+    mount="$NO_PROFILE_MARK (codekiln init --profile <name> to add one)."
+  else
+    mount="// Guidelines profile \"$profile\", read-only (codekiln init --profile <name|none> to change)."
+    mount+=$'\n    '"\"source=$USER_PROFILES/$profile,target=$GUIDELINES_TARGET,type=bind,readonly\","
+  fi
   local content; content="$(<"$ROOT/templates/devcontainer.json")"
   content="${content//__IMAGE__/$IMAGE:$tag}"
   content="${content//__SKILLS_DIR__/$(repl_escape "$SKILLS_DIR")}"
   content="${content//__NETWORK_DIR__/$(repl_escape "$NETWORK_DIR")}"
+  content="${content//__GUIDELINES_MOUNT__/$(repl_escape "$mount")}"
   printf '%s\n' "$content" >"$target"
-  echo "wrote $target (image $IMAGE:$tag)"
+  echo "wrote $target (image $IMAGE:$tag, profile $profile)"
 
   # Keep it out of the project's history without touching its .gitignore.
   if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
@@ -197,7 +230,7 @@ cmd_open() {
   parse_args "$@"
   local dir; dir="$(cd "${DIR:-.}" && pwd)"
   local target="$dir/.devcontainer/devcontainer.json"
-  if [[ ! -e $target || ${#LAYERS[@]} -gt 0 ]] || ! grep -q "\"$IMAGE:" "$target"; then
+  if [[ ! -e $target || ${#LAYERS[@]} -gt 0 || -n $PROFILE ]] || ! grep -q "\"$IMAGE:" "$target"; then
     cmd_init "$@"
   elif ! grep -qF "$TEMPLATE_MARK" "$target"; then
     echo "config was written by an older codekiln - regenerating"
@@ -209,7 +242,7 @@ cmd_open() {
     || die "$IMAGE:$tag is not built yet - see the note above or run: codekiln build"
   command -v code >/dev/null || die "'code' not on PATH - open $dir in VS Code manually"
   code "$dir"
-  echo "In VS Code: 'Reopen in Container' (after switching stacks: 'Rebuild Container')"
+  echo "In VS Code: 'Reopen in Container' (after switching stacks or profiles: 'Rebuild Container')"
 }
 
 cmd_update() {
@@ -220,7 +253,7 @@ cmd_update() {
 
 cmd_paths() {
   printf '%-16s %s\n' "program" "$ROOT" "your layers" "$USER_LAYERS" "your skills" "$SKILLS_DIR" \
-    "your allowlist" "$ALLOWLIST"
+    "your allowlist" "$ALLOWLIST" "your profiles" "$USER_PROFILES" "default profile" "$(default_profile)"
 }
 
 # --- network allowlist ----------------------------------------------------------
@@ -353,6 +386,145 @@ cmd_disallow() {
   if [[ $removed -gt 0 ]]; then apply_allowlist; fi
 }
 
+# --- guideline profiles ---------------------------------------------------------
+# A profile is a folder with an AGENTS.md. Bundled ones live in the checkout;
+# yours (installed copies and your own) in $USER_PROFILES, which is what gets
+# mounted. Each project picks one at `init`; the default only decides what a
+# project gets when it is first set up without --profile.
+
+GUIDELINES_TARGET="/etc/codekiln/guidelines"
+NO_PROFILE_MARK="// No guidelines profile"
+
+valid_profile_name() { [[ $1 =~ ^[a-z0-9][a-z0-9._-]*$ && $1 != none ]]; }
+
+default_profile() {
+  local p=""
+  [[ -r $DEFAULT_PROFILE_FILE ]] && p="$(tr -d '[:space:]' <"$DEFAULT_PROFILE_FILE")"
+  echo "${p:-none}"
+}
+
+# Profile a project's config uses: a name, "none", or empty (older config).
+configured_profile() {
+  local src
+  src="$(sed -n -E "s|.*\"source=([^,]*),target=$GUIDELINES_TARGET,.*|\1|p" "$1" 2>/dev/null | head -n1)"
+  if [[ -n $src && $(dirname "$src") == "$USER_PROFILES" ]]; then
+    basename "$src"
+  elif grep -qF "$NO_PROFILE_MARK" "$1" 2>/dev/null; then
+    echo none
+  fi
+}
+
+# Makes sure $USER_PROFILES/<name> exists, installing the bundled one if needed.
+ensure_profile() {
+  valid_profile_name "$1" || die "'$1' is not a valid profile name (lower-case letters, digits, . _ -)"
+  [[ -f $USER_PROFILES/$1/AGENTS.md ]] && return
+  [[ -f $BUNDLED_PROFILES/$1/AGENTS.md ]] \
+    || die "no profile '$1' (see: codekiln profile list; make one with: codekiln profile new $1)"
+  install_profile "$1" 0
+}
+
+install_profile() {  # <name> <force>
+  local src="$BUNDLED_PROFILES/$1/AGENTS.md" dest="$USER_PROFILES/$1/AGENTS.md"
+  mkdir -p "$USER_PROFILES/$1"
+  if [[ -e $dest ]]; then
+    if cmp -s "$src" "$dest"; then echo "profile '$1' is already installed: $dest"; return; fi
+    [[ $2 -eq 1 ]] || die "$dest already exists (perhaps with your edits) - add --force to replace it (it is kept as AGENTS.md.bak)"
+    cp -p "$dest" "$dest.bak"
+    echo "kept the previous file as $dest.bak"
+  fi
+  cp "$src" "$dest"
+  echo "installed profile '$1': $dest (edit it to taste)"
+}
+
+profile_names() {
+  local d
+  for d in "$BUNDLED_PROFILES"/*/ "$USER_PROFILES"/*/; do
+    [[ -f $d/AGENTS.md ]] && basename "$d"
+  done | sort -u
+}
+
+cmd_profile() {
+  local action="${1:-list}"
+  [[ $# -eq 0 ]] || shift
+  local name="" a
+  case $action in
+    list)
+      local def notes
+      def="$(default_profile)"
+      for name in $(profile_names); do
+        notes=()
+        if [[ -f $USER_PROFILES/$name/AGENTS.md ]]; then
+          if [[ -f $BUNDLED_PROFILES/$name/AGENTS.md ]]; then notes+=("installed"); else notes+=("yours"); fi
+        else
+          notes+=("bundled (not installed yet)")
+        fi
+        [[ $name == "$def" ]] && notes+=("default")
+        printf '%-12s %s\n' "$name" "$(IFS=,; echo "${notes[*]}" | sed 's/,/, /g')"
+      done
+      echo "default for new projects: $def   (your profiles: $USER_PROFILES)"
+      ;;
+    install)
+      local force=0
+      for a in "$@"; do
+        case $a in --force) force=1 ;; -*) die "unknown option: $a" ;; *) name="$a" ;; esac
+      done
+      [[ -n $name ]] || die "usage: codekiln profile install <name> [--force]  (see: codekiln profile list)"
+      valid_profile_name "$name" && [[ -f $BUNDLED_PROFILES/$name/AGENTS.md ]] \
+        || die "no bundled profile '$name' (see: codekiln profile list)"
+      install_profile "$name" "$force"
+      echo "use it with: codekiln init <project> --profile $name   (or for new projects: codekiln profile default $name)"
+      ;;
+    new)
+      local from=""
+      while [[ $# -gt 0 ]]; do
+        case $1 in
+          --from) [[ $# -ge 2 ]] || die "--from needs a profile name"; from="$2"; shift ;;
+          --from=*) from="${1#--from=}" ;;
+          -*) die "unknown option: $1" ;;
+          *) name="$1" ;;
+        esac
+        shift
+      done
+      [[ -n $name ]] || die "usage: codekiln profile new <name> [--from <profile>]"
+      valid_profile_name "$name" || die "'$name' is not a valid profile name (lower-case letters, digits, . _ -)"
+      local dest="$USER_PROFILES/$name/AGENTS.md"
+      [[ ! -e $dest ]] || die "$dest already exists"
+      mkdir -p "$USER_PROFILES/$name"
+      if [[ -n $from ]]; then
+        local src="$USER_PROFILES/$from/AGENTS.md"
+        [[ -f $src ]] || src="$BUNDLED_PROFILES/$from/AGENTS.md"
+        valid_profile_name "$from" && [[ -f $src ]] || { rmdir "$USER_PROFILES/$name"; die "no profile '$from'"; }
+        cp "$src" "$dest"
+      else
+        printf '# Guidelines (%s)\n\nInstructions for the agent in projects that use this profile.\n' "$name" >"$dest"
+      fi
+      echo "created $dest - edit it, then: codekiln init <project> --profile $name"
+      ;;
+    default)
+      if [[ $# -eq 0 ]]; then default_profile; return; fi
+      name="$1"
+      [[ $name == none ]] || ensure_profile "$name"
+      mkdir -p "$CONFIG_DIR"
+      echo "$name" >"$DEFAULT_PROFILE_FILE"
+      if [[ $name == none ]]; then
+        echo "no default profile - projects set up from now on without --profile get none."
+      else
+        echo "default profile: $name - used by projects set up from now on without --profile."
+      fi
+      echo "Existing projects keep theirs; switch one with: codekiln init <project> --profile <name|none>"
+      ;;
+    show)
+      name="${1:-$(default_profile)}"
+      [[ $name != none ]] || die "no default profile set (see: codekiln profile list)"
+      if [[ -f $USER_PROFILES/$name/AGENTS.md ]]; then cat "$USER_PROFILES/$name/AGENTS.md"
+      elif valid_profile_name "$name" && [[ -f $BUNDLED_PROFILES/$name/AGENTS.md ]]; then cat "$BUNDLED_PROFILES/$name/AGENTS.md"
+      else die "no profile '$name'"
+      fi
+      ;;
+    *) die "usage: codekiln profile [list | install <name> [--force] | new <name> [--from <p>] | default [name|none] | show [name]]" ;;
+  esac
+}
+
 case "${1:-}" in
   layers)  shift; cmd_layers ;;
   build)   shift; cmd_build "$@" ;;
@@ -362,6 +534,7 @@ case "${1:-}" in
   images)  docker images "$IMAGE" ;;
   allow)    shift; cmd_allow "$@" ;;
   disallow) shift; cmd_disallow "$@" ;;
+  profile)  shift; cmd_profile "$@" ;;
   update)   cmd_update ;;
   paths)    cmd_paths ;;
   # Usage: the comment block at the top of this file.

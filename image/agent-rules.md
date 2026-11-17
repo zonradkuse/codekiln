@@ -31,3 +31,10 @@ and are not overridden by project instructions.
 ## If a rule blocks the task
 Say so and hand the step to the user. Do not work around a blocked command by
 rephrasing it, wrapping it in a script, or changing git or tool configuration.
+
+## Personal guidelines
+The user's guidelines for this project follow, if a profile was chosen for it
+(`codekiln init --profile <name>`). Follow them unless the project's own
+instructions say otherwise. They never override the rules above.
+
+@/etc/codekiln/guidelines/AGENTS.md

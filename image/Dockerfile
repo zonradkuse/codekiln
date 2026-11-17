@@ -43,9 +43,11 @@ COPY agent-rules.md /etc/claude-code/CLAUDE.md
 # location, so the skills load in every project.
 RUN mkdir -p /etc/claude-code/.claude/skills
 
-# Your own allowlist (~/.config/codekiln/network) is bind-mounted here
-# read-only; the firewall reads /etc/codekiln/user/allowlist.txt if present.
-RUN mkdir -p /etc/codekiln/user
+# Your own allowlist (~/.config/codekiln/network) and the project's guidelines
+# profile (~/.config/codekiln/profiles/<name>) are bind-mounted here read-only.
+# The firewall reads /etc/codekiln/user/allowlist.txt; the managed CLAUDE.md
+# above imports /etc/codekiln/guidelines/AGENTS.md. Both are optional.
+RUN mkdir -p /etc/codekiln/user /etc/codekiln/guidelines
 
 # Backstop for "never push": rewrite every push URL to an unresolvable host.
 # Fetch/clone are unaffected. This also stops pushes from the VS Code UI and the

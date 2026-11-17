@@ -14,6 +14,7 @@
     "source=codekiln-state,target=/home/ubuntu/.claude,type=volume",
     // Shared skills from the host, read-only.
     "source=__SKILLS_DIR__,target=/etc/claude-code/.claude/skills,type=bind,readonly",
+    __GUIDELINES_MOUNT__
     // Your extra allowed hosts (`codekiln allow`), read-only.
     "source=__NETWORK_DIR__,target=/etc/codekiln/user,type=bind,readonly"
   ],

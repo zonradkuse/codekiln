@@ -6,11 +6,14 @@
 # Installs for the current user only, no sudo:
 #   program  -> ~/.local/share/codekiln   (a git clone; update with `codekiln update`)
 #   command  -> ~/.local/bin/codekiln     (symlink)
-#   your own -> ~/.config/codekiln/       (skills/, layers/, network/;
+#   your own -> ~/.config/codekiln/       (skills/, layers/, network/, profiles/;
 #                                          never touched by updates)
 #
 # Options:      --no-modify-path   do not add ~/.local/bin to PATH in your shell profile
-#               (with curl:  ... | bash -s -- --no-modify-path)
+#               --profile <name>   install a guidelines profile and make it the default
+#                                  for new projects, e.g. --profile coding
+#                                  (same as `codekiln profile default <name>` later)
+#               (with curl:  ... | bash -s -- --no-modify-path --profile coding)
 # Environment:  CODEKILN_REPO, CODEKILN_HOME, CODEKILN_BIN, CODEKILN_CONFIG
 set -euo pipefail
 
@@ -26,8 +29,16 @@ main() {
   local dest="${CODEKILN_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/codekiln}"
   local bin_dir="${CODEKILN_BIN:-$HOME/.local/bin}"
   local config_dir="${CODEKILN_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/codekiln}"
-  local modify_path=1
-  [[ ${1:-} == "--no-modify-path" ]] && modify_path=0
+  local modify_path=1 profile=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --no-modify-path) modify_path=0 ;;
+      --profile) [[ $# -ge 2 ]] || die "--profile needs a name, e.g. --profile coding"; profile="$2"; shift ;;
+      --profile=*) profile="${1#--profile=}" ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
 
   command -v git >/dev/null || die "git is required"
 
@@ -59,7 +70,13 @@ main() {
   say "linked $bin_dir/codekiln"
 
   # --- your own files -----------------------------------------------------------
-  mkdir -p "$config_dir/skills" "$config_dir/layers" "$config_dir/network"
+  mkdir -p "$config_dir/skills" "$config_dir/layers" "$config_dir/network" "$config_dir/profiles"
+  if [[ -n $profile ]]; then
+    # Keeps an existing copy with your edits. An unknown name should not stop
+    # the rest of an update.
+    CODEKILN_CONFIG="$config_dir" "$dest/bin/codekiln" profile default "$profile" \
+      || say "profile '$profile' not set - see the message above"
+  fi
 
   # --- PATH ---------------------------------------------------------------------
   local on_path=0
@@ -96,11 +113,13 @@ Installed.
   your layers      $config_dir/layers
   your skills      $config_dir/skills
   your allowlist   $config_dir/network/allowlist.txt
+  your profiles    $config_dir/profiles
 
 Next:
   codekiln build                 # base image; add layers, e.g. codekiln build cpp ts
   codekiln open <project>        # then "Reopen in Container" in VS Code
   codekiln allow <host>          # let containers reach another HTTPS host
+  codekiln init <project> --profile coding  # opinionated coding guidelines
 MSG
 }
 
