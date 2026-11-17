@@ -204,6 +204,18 @@ Nothing is written into your projects. A project's own `AGENTS.md` or
 project's instructions where the two disagree. The sandbox rules still come
 first.
 
+## SELinux
+
+With SELinux enforcing (Fedora, RHEL), Docker and Podman don't let a
+container read host folders unless they carry the `container_file_t` label.
+`codekiln init` and `codekiln open` therefore relabel codekiln's own mounted
+folders (skills, network and profiles under `~/.config/codekiln`, or your
+`CODEKILN_SKILLS` folder) with `chcon -R -t container_file_t`. Nothing else is
+touched. New files in those folders inherit the label; a file moved in from
+elsewhere keeps its old one until the next `open`. A full `restorecon` resets
+the labels, and the next `open` sets them again. On hosts without SELinux
+this step does nothing.
+
 ## What is restricted
 
 **Telemetry.** Claude Code's opt-out variables are set in the image and again

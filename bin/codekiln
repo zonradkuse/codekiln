@@ -164,6 +164,21 @@ cmd_rebuild() {
 # Escapes '&' for the replacement side of ${var//pattern/replacement} (bash 5.2+).
 repl_escape() { printf '%s' "${1//&/\\&}"; }
 
+# Docker and Podman under SELinux deny a container access to host folders that do
+# not carry the container_file_t type (what a ":z" mount would set, which the
+# devcontainer mount syntax cannot express). Relabels only the given folders,
+# which are codekiln's own; files created there later inherit the label.
+selinux_label() {
+  command -v selinuxenabled >/dev/null && selinuxenabled 2>/dev/null || return 0
+  command -v chcon >/dev/null || return 0
+  local d
+  for d in "$@"; do
+    [[ -d $d ]] || continue
+    chcon -R -t container_file_t "$d" 2>/dev/null \
+      || echo "warning: could not relabel $d for SELinux - containers may not be able to read it (try: chcon -R -t container_file_t '$d')" >&2
+  done
+}
+
 # Tag currently configured in a project, or empty.
 configured_tag() {
   sed -n -E "s/.*\"image\": *\"($IMAGE|$LEGACY_IMAGE):([^\"]*)\".*/\2/p" "$1" 2>/dev/null | head -n1
@@ -193,6 +208,7 @@ cmd_init() {
 
   mkdir -p "$dir/.devcontainer" "$SKILLS_DIR" "$USER_PROFILES"
   ensure_allowlist
+  selinux_label "$SKILLS_DIR" "$NETWORK_DIR" "$USER_PROFILES"
 
   local mount
   if [[ $profile == none ]]; then
@@ -237,6 +253,8 @@ cmd_open() {
     cmd_init "$@"
     echo "note: use 'Rebuild Container' in VS Code to pick up the new mounts"
   fi
+  # Again on every open: files moved into these folders keep their old label.
+  selinux_label "$SKILLS_DIR" "$NETWORK_DIR" "$USER_PROFILES"
   local tag; tag="$(configured_tag "$target")"
   docker image inspect "$IMAGE:$tag" >/dev/null 2>&1 \
     || die "$IMAGE:$tag is not built yet - see the note above or run: codekiln build"
