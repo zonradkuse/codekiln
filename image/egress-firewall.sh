@@ -21,8 +21,12 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # If anything goes wrong, block everything rather than leave the network open.
+# Both families: a container with a global IPv6 address would otherwise stay
+# reachable over IPv6.
 fail_closed() {
-  iptables-restore <<'RULES' || true
+  local restore
+  for restore in iptables-restore ip6tables-restore; do
+    "$restore" 2>/dev/null <<'RULES' || true
 *filter
 :INPUT DROP [0:0]
 :FORWARD DROP [0:0]
@@ -31,6 +35,7 @@ fail_closed() {
 -A OUTPUT -o lo -j ACCEPT
 COMMIT
 RULES
+  done
 }
 trap 'warn "setup failed at line $LINENO - blocking ALL traffic"; fail_closed; exit 1' ERR
 
