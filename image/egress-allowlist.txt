@@ -1,5 +1,7 @@
 # Outbound allowlist (HTTPS/443 only). One domain per line, '#' starts a comment.
 # Baked into the image: rebuild after editing (codekiln rebuild).
+# To add hosts without editing this file or rebuilding, use `codekiln allow
+# <host>` on the host; that list is kept in ~/.config/codekiln/network/.
 # Hosts are resolved to IPs when the container starts; if one stops responding
 # later, refresh with: sudo /usr/local/sbin/egress-firewall
 

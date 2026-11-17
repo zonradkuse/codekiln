@@ -6,7 +6,8 @@
 # Installs for the current user only, no sudo:
 #   program  -> ~/.local/share/codekiln   (a git clone; update with `codekiln update`)
 #   command  -> ~/.local/bin/codekiln     (symlink)
-#   your own -> ~/.config/codekiln/       (skills/ and layers/, never touched by updates)
+#   your own -> ~/.config/codekiln/       (skills/, layers/, network/;
+#                                          never touched by updates)
 #
 # Options:      --no-modify-path   do not add ~/.local/bin to PATH in your shell profile
 #               (with curl:  ... | bash -s -- --no-modify-path)
@@ -58,7 +59,7 @@ main() {
   say "linked $bin_dir/codekiln"
 
   # --- your own files -----------------------------------------------------------
-  mkdir -p "$config_dir/skills" "$config_dir/layers"
+  mkdir -p "$config_dir/skills" "$config_dir/layers" "$config_dir/network"
 
   # --- PATH ---------------------------------------------------------------------
   local on_path=0
@@ -91,13 +92,15 @@ main() {
   cat <<MSG
 
 Installed.
-  program      $dest
-  your layers  $config_dir/layers
-  your skills  $config_dir/skills
+  program          $dest
+  your layers      $config_dir/layers
+  your skills      $config_dir/skills
+  your allowlist   $config_dir/network/allowlist.txt
 
 Next:
   codekiln build                 # base image; add layers, e.g. codekiln build cpp ts
   codekiln open <project>        # then "Reopen in Container" in VS Code
+  codekiln allow <host>          # let containers reach another HTTPS host
 MSG
 }
 

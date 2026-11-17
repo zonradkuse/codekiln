@@ -10,10 +10,14 @@
 #                                         (run again with other layers to switch stacks)
 #   codekiln open    [dir] [layers...]   init if needed, then open the project in VS Code
 #   codekiln images                      list built images
+#   codekiln allow   [hosts...]          allow HTTPS to more hosts (no args: list yours);
+#                                         applied to running containers right away
+#   codekiln disallow <hosts...>         remove hosts you allowed
 #   codekiln update                      pull the latest codekiln (then: codekiln rebuild)
 #   codekiln paths                       show where codekiln keeps its files
 #
 # Examples:  codekiln build cpp arm mingw      codekiln open ~/code/app ts python
+#            codekiln allow api.example.com
 # A name that matches a layer is a layer; write ./name for a directory of that name.
 set -euo pipefail
 
@@ -30,6 +34,14 @@ ROOT="${CODEKILN_HOME:-$(cd -P "$(dirname "$self")/.." && pwd)}"
 CONFIG_DIR="${CODEKILN_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/codekiln}"
 SKILLS_DIR="${CODEKILN_SKILLS:-$CONFIG_DIR/skills}"
 USER_LAYERS="$CONFIG_DIR/layers"
+NETWORK_DIR="$CONFIG_DIR/network"          # mounted at /etc/codekiln/user
+ALLOWLIST="$NETWORK_DIR/allowlist.txt"
+BUNDLED_ALLOWLIST="$ROOT/image/egress-allowlist.txt"
+
+# Bump together with the marker in templates/devcontainer.json when the template
+# changes, so `open` regenerates configs written by an older version.
+TEMPLATE_MARK="(template 2)"
+STATE_VOLUME="codekiln-state"
 
 IMAGE="codekiln"
 LEGACY_IMAGE="claude-devcontainer"   # configs written before the rename
@@ -130,6 +142,9 @@ cmd_rebuild() {
   done
 }
 
+# Escapes '&' for the replacement side of ${var//pattern/replacement} (bash 5.2+).
+repl_escape() { printf '%s' "${1//&/\\&}"; }
+
 # Tag currently configured in a project, or empty.
 configured_tag() {
   sed -n -E "s/.*\"image\": *\"($IMAGE|$LEGACY_IMAGE):([^\"]*)\".*/\2/p" "$1" 2>/dev/null | head -n1
@@ -153,10 +168,11 @@ cmd_init() {
   fi
 
   mkdir -p "$dir/.devcontainer" "$SKILLS_DIR"
+  ensure_allowlist
   local content; content="$(<"$ROOT/templates/devcontainer.json")"
-  local skills_escaped="${SKILLS_DIR//&/\\&}"
   content="${content//__IMAGE__/$IMAGE:$tag}"
-  content="${content//__SKILLS_DIR__/$skills_escaped}"
+  content="${content//__SKILLS_DIR__/$(repl_escape "$SKILLS_DIR")}"
+  content="${content//__NETWORK_DIR__/$(repl_escape "$NETWORK_DIR")}"
   printf '%s\n' "$content" >"$target"
   echo "wrote $target (image $IMAGE:$tag)"
 
@@ -183,6 +199,10 @@ cmd_open() {
   local target="$dir/.devcontainer/devcontainer.json"
   if [[ ! -e $target || ${#LAYERS[@]} -gt 0 ]] || ! grep -q "\"$IMAGE:" "$target"; then
     cmd_init "$@"
+  elif ! grep -qF "$TEMPLATE_MARK" "$target"; then
+    echo "config was written by an older codekiln - regenerating"
+    cmd_init "$@"
+    echo "note: use 'Rebuild Container' in VS Code to pick up the new mounts"
   fi
   local tag; tag="$(configured_tag "$target")"
   docker image inspect "$IMAGE:$tag" >/dev/null 2>&1 \
@@ -199,7 +219,138 @@ cmd_update() {
 }
 
 cmd_paths() {
-  printf '%-14s %s\n' "program" "$ROOT" "your layers" "$USER_LAYERS" "your skills" "$SKILLS_DIR"
+  printf '%-16s %s\n' "program" "$ROOT" "your layers" "$USER_LAYERS" "your skills" "$SKILLS_DIR" \
+    "your allowlist" "$ALLOWLIST"
+}
+
+# --- network allowlist ----------------------------------------------------------
+
+ensure_allowlist() {
+  mkdir -p "$NETWORK_DIR"
+  [[ -e $ALLOWLIST ]] && return
+  cat >"$ALLOWLIST" <<'LIST'
+# Your extra allowed hosts (HTTPS/443 only), on top of the bundled list.
+# One host name or IPv4 address/network per line, '#' starts a comment.
+# Manage with `codekiln allow <host>` / `codekiln disallow <host>`, or edit by
+# hand. Mounted read-only into every container at /etc/codekiln/user/; in a
+# running container, `codekiln allow` re-applies it, or run there:
+#   sudo /usr/local/sbin/egress-firewall
+LIST
+}
+
+# Entries of an allowlist file: comments and blanks stripped, lower-cased.
+list_entries() {
+  [[ -r $1 ]] || return 0
+  sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Same checks as the firewall script, which skips anything that fails them.
+is_valid_net() {
+  local o='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])'
+  [[ $1 =~ ^$o\.$o\.$o\.$o(/([1-9]|[12][0-9]|3[0-2]))?$ ]]
+}
+is_domain() { [[ $1 =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]; }
+
+# Accepts a bare host or a pasted URL; prints the host or dies.
+normalize_host() {
+  local h="${1,,}"
+  h="${h#*://}"
+  # Strip a URL path, but keep the prefix of an address/network like 10.0.0.0/8.
+  [[ $h =~ ^[0-9.]+/[0-9]+$ ]] || h="${h%%/*}"
+  h="${h%%\?*}"; h="${h%%#*}"; h="${h##*@}"
+  h="${h%:443}"; h="${h%.}"
+  [[ $h != *:* ]] || die "'$1': only HTTPS on port 443 can be allowed"
+  [[ $h != *'*'* ]] || die "'$1': wildcards are not supported (the firewall allows resolved addresses); list each host"
+  is_domain "$h" || is_valid_net "$h" || die "'$1' is not a valid host name or IPv4 address/network"
+  printf '%s\n' "$h"
+}
+
+# Re-runs the firewall in running codekiln containers (they all mount the state
+# volume), so the change applies without a restart.
+apply_allowlist() {
+  local hint="in a running container: sudo /usr/local/sbin/egress-firewall"
+  if ! command -v docker >/dev/null; then echo "applies on the next container start ($hint)"; return; fi
+  local ids id name out
+  mapfile -t ids < <(docker ps -q --filter "volume=$STATE_VOLUME" 2>/dev/null || true)
+  if [[ ${#ids[@]} -eq 0 ]]; then echo "no running containers found - applies on the next start ($hint)"; return; fi
+  for id in "${ids[@]}"; do
+    name="$(docker inspect -f '{{.Name}}' "$id" 2>/dev/null || echo "$id")"; name="${name#/}"
+    if ! docker exec -u root "$id" test -e /etc/codekiln/user/allowlist.txt 2>/dev/null; then
+      echo "$name: created from an older config - run 'codekiln init' in the project, then 'Rebuild Container'"
+      continue
+    fi
+    if out="$(docker exec -u root "$id" /usr/local/sbin/egress-firewall 2>&1)"; then
+      echo "$name: applied"
+      grep -F "WARNING" <<<"$out" | sed 's/^/  /' || true
+    else
+      echo "$name: firewall update FAILED - all outbound traffic is blocked until it succeeds:"
+      tail -n 5 <<<"$out" | sed 's/^/  /'
+    fi
+  done
+}
+
+cmd_allow() {
+  ensure_allowlist
+  local apply=1 a h hosts=() added=0
+  for a in "$@"; do
+    case $a in
+      --no-apply) apply=0 ;;
+      -*) die "unknown option: $a" ;;
+      *) h="$(normalize_host "$a")" || exit 1; hosts+=("$h") ;;
+    esac
+  done
+
+  if [[ ${#hosts[@]} -eq 0 ]]; then
+    echo "your allowed hosts ($ALLOWLIST):"
+    if [[ -n "$(list_entries "$ALLOWLIST")" ]]; then
+      list_entries "$ALLOWLIST" | sed 's/^/  /'
+    else
+      echo "  (none)"
+    fi
+    echo "plus $(list_entries "$BUNDLED_ALLOWLIST" | wc -l | tr -d ' ') bundled hosts ($BUNDLED_ALLOWLIST)"
+    return
+  fi
+
+  for h in "${hosts[@]}"; do
+    if list_entries "$ALLOWLIST" | grep -qxF "$h"; then
+      echo "already allowed: $h"
+    elif list_entries "$BUNDLED_ALLOWLIST" | grep -qxF "$h"; then
+      echo "already allowed by the bundled list: $h"
+    else
+      # Keep the new entry on its own line even if the file lacks a final newline.
+      [[ ! -s $ALLOWLIST || -z "$(tail -c 1 "$ALLOWLIST")" ]] || echo >>"$ALLOWLIST"
+      echo "$h" >>"$ALLOWLIST"
+      echo "allowed: $h"
+      added=$((added + 1))
+    fi
+  done
+  if [[ $added -gt 0 && $apply -eq 1 ]]; then apply_allowlist; fi
+}
+
+cmd_disallow() {
+  [[ $# -gt 0 ]] || die "usage: codekiln disallow <hosts...>"
+  ensure_allowlist
+  local a h hosts=() removed=0 tmp
+  for a in "$@"; do
+    [[ $a != -* ]] || die "unknown option: $a"
+    h="$(normalize_host "$a")" || exit 1; hosts+=("$h")
+  done
+  for h in "${hosts[@]}"; do
+    if list_entries "$ALLOWLIST" | grep -qxF "$h"; then
+      tmp="$(mktemp "$NETWORK_DIR/.allowlist.XXXXXX")"
+      # Drop lines whose entry (comment and blanks stripped) is this host.
+      awk -v h="$h" '{ e = tolower($0); sub(/#.*/, "", e); gsub(/[[:space:]]/, "", e); if (e != h) print }' \
+        "$ALLOWLIST" >"$tmp"
+      chmod 0644 "$tmp"; mv "$tmp" "$ALLOWLIST"
+      echo "removed: $h"
+      removed=$((removed + 1))
+    elif list_entries "$BUNDLED_ALLOWLIST" | grep -qxF "$h"; then
+      echo "$h is on the bundled list - remove it from $BUNDLED_ALLOWLIST and run: codekiln rebuild"
+    else
+      echo "not on your list: $h"
+    fi
+  done
+  if [[ $removed -gt 0 ]]; then apply_allowlist; fi
 }
 
 case "${1:-}" in
@@ -209,7 +360,10 @@ case "${1:-}" in
   init)    shift; cmd_init "$@" ;;
   open)    shift; cmd_open "$@" ;;
   images)  docker images "$IMAGE" ;;
-  update)  cmd_update ;;
-  paths)   cmd_paths ;;
-  *)       sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  allow)    shift; cmd_allow "$@" ;;
+  disallow) shift; cmd_disallow "$@" ;;
+  update)   cmd_update ;;
+  paths)    cmd_paths ;;
+  # Usage: the comment block at the top of this file.
+  *)        awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 1 ;;
 esac

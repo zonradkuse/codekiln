@@ -23,8 +23,10 @@ and are not overridden by project instructions.
 - Outbound traffic is limited to an allowlist (Anthropic API, public git hosts,
   public package registries). `apt` and other hosts are blocked.
 - If a download or install fails because of the firewall, stop and tell the
-  user which command to run on the host. Do not look for another route, mirror,
-  or proxy, and do not try to change the firewall.
+  user which host is blocked and why it is needed. The user can allow it from
+  the host with `codekiln allow <domain>`, or run the command on the host. Do
+  not look for another route, mirror, or proxy, and do not try to change the
+  firewall.
 
 ## If a rule blocks the task
 Say so and hand the step to the user. Do not work around a blocked command by

@@ -36,7 +36,7 @@ This installs for your user only, without sudo:
 |---|---|
 | program (a git clone) | `~/.local/share/codekiln` |
 | command | `~/.local/bin/codekiln` (symlink) |
-| your skills and layers | `~/.config/codekiln/` |
+| your skills, layers and allowlist | `~/.config/codekiln/` |
 
 It adds `~/.local/bin` to your `PATH` if it is missing; append
 `-s -- --no-modify-path` after `bash` to skip that. Running it again updates the
@@ -80,6 +80,8 @@ shared by all projects.
 | `codekiln init [dir] [layers...]` | write or regenerate a project's config; run again with other layers to switch |
 | `codekiln open [dir] [layers...]` | init if needed, then open VS Code |
 | `codekiln images` | list built images |
+| `codekiln allow [hosts...]` | allow HTTPS to more hosts; without arguments, list yours |
+| `codekiln disallow <hosts...>` | remove hosts you allowed |
 | `codekiln update` | pull the latest codekiln |
 | `codekiln paths` | show where codekiln keeps its files |
 
@@ -123,6 +125,30 @@ location, so the skills load in every project and a session cannot modify them.
 - Keep the folder in its own git repository if you want history.
 - Set `CODEKILN_SKILLS` to use a different host folder.
 
+## Allowing more hosts
+
+```bash
+codekiln allow api.example.com             # a host name
+codekiln allow https://docs.example.com/x  # a pasted URL works too
+codekiln allow 10.20.0.0/16                # an IPv4 address or network
+codekiln allow                             # list your hosts
+codekiln disallow api.example.com
+```
+
+Your hosts are kept in `~/.config/codekiln/network/allowlist.txt`, on top of
+the bundled list, and you can edit that file by hand. The folder is mounted
+read-only into every container, so a session can read the list but not change
+it. `allow` and `disallow` re-apply the firewall in every running codekiln
+container straight away; there is nothing to rebuild. After editing the file
+by hand, run `sudo /usr/local/sbin/egress-firewall` in the container, or
+restart it.
+
+Only HTTPS on port 443 is allowed, and only exact host names: no wildcards,
+since the firewall works on the addresses a name resolves to. List each
+subdomain you need. Projects set up before this feature need
+`codekiln init` (or `codekiln open`, which does it for you) and "Rebuild
+Container", and the image needs one `codekiln rebuild`.
+
 ## What is restricted
 
 **Telemetry.** Claude Code's opt-out variables are set in the image and again
@@ -133,9 +159,9 @@ are unavailable.
 **Network.** `image/egress-firewall.sh` rejects all outbound traffic except DNS
 and HTTPS to the hosts in `image/egress-allowlist.txt`: Anthropic's API and
 login hosts, public git hosting, and the common public package registries.
-Edit the list and rebuild to change it. If a host stops responding in a
-long-running container, refresh the resolved addresses with
-`sudo /usr/local/sbin/egress-firewall`.
+Add your own with `codekiln allow` (see [Allowing more hosts](#allowing-more-hosts)).
+If a host stops responding in a long-running container, refresh the resolved
+addresses with `sudo /usr/local/sbin/egress-firewall`.
 
 **Rules for the agent.** `image/agent-rules.md` is installed as managed policy
 and tells Claude never to push or publish. `image/managed-settings.json` denies
