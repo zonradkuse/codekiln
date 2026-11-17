@@ -11,9 +11,9 @@
 #
 # Options:      --no-modify-path   do not add ~/.local/bin to PATH in your shell profile
 #               --profile <name>   install a guidelines profile and make it the default
-#                                  for new projects, e.g. --profile coding
+#                                  for new projects, e.g. --profile supervised-coding
 #                                  (same as `codekiln profile default <name>` later)
-#               (with curl:  ... | bash -s -- --no-modify-path --profile coding)
+#               (with curl:  ... | bash -s -- --no-modify-path --profile supervised-coding)
 # Environment:  CODEKILN_REPO, CODEKILN_HOME, CODEKILN_BIN, CODEKILN_CONFIG
 set -euo pipefail
 
@@ -33,7 +33,7 @@ main() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --no-modify-path) modify_path=0 ;;
-      --profile) [[ $# -ge 2 ]] || die "--profile needs a name, e.g. --profile coding"; profile="$2"; shift ;;
+      --profile) [[ $# -ge 2 ]] || die "--profile needs a name, e.g. --profile supervised-coding"; profile="$2"; shift ;;
       --profile=*) profile="${1#--profile=}" ;;
       *) die "unknown option: $1" ;;
     esac
@@ -119,7 +119,7 @@ Next:
   codekiln build                 # base image; add layers, e.g. codekiln build cpp ts
   codekiln open <project>        # then "Reopen in Container" in VS Code
   codekiln allow <host>          # let containers reach another HTTPS host
-  codekiln init <project> --profile coding  # opinionated coding guidelines
+  codekiln init <project> --profile supervised-coding  # opinionated coding guidelines
 MSG
 }
 

@@ -25,7 +25,7 @@
 #   codekiln paths                       show where codekiln keeps its files
 #
 # Examples:  codekiln build cpp arm mingw      codekiln open ~/code/app ts python
-#            codekiln allow api.example.com    codekiln init ~/code/app --profile coding
+#            codekiln allow api.example.com    codekiln init ~/code/app --profile supervised-coding
 # A name that matches a layer is a layer; write ./name for a directory of that name.
 set -euo pipefail
 

@@ -41,7 +41,7 @@ This installs for your user only, without sudo:
 It adds `~/.local/bin` to your `PATH` if it is missing; append
 `-s -- --no-modify-path` after `bash` to skip that. To make the opinionated
 coding guidelines the default for new projects (see
-[Coding guidelines](#coding-guidelines)), append `-s -- --profile coding`.
+[Coding guidelines](#coding-guidelines)), append `-s -- --profile supervised-coding`.
 Running it again updates the
 install, as does `codekiln update`. If you would rather read the script first,
 clone the repository and run `./install.sh` from the checkout.
@@ -68,7 +68,7 @@ extension marketplace, so the host has to download extensions for it:
 ```bash
 codekiln open ~/code/some-project          # base image
 codekiln open ~/code/firmware cpp arm-none # base + layers
-codekiln open ~/code/app ts --profile coding  # with coding guidelines
+codekiln open ~/code/app ts --profile supervised-coding  # with coding guidelines
 ```
 
 This writes `.devcontainer/devcontainer.json` into the project, hides it from
@@ -165,22 +165,22 @@ choose a profile. A profile is a folder with one `AGENTS.md`, and each
 project picks one:
 
 ```bash
-codekiln init ~/code/app --profile coding    # opinionated coding guidelines
-codekiln init ~/code/notes --profile none    # none for this project
-codekiln profile default coding              # what new projects get without --profile
+codekiln init ~/code/app --profile supervised-coding  # opinionated coding guidelines
+codekiln init ~/code/notes --profile none             # none for this project
+codekiln profile default supervised-coding            # what new projects get without --profile
 ```
 
 The first use of a bundled profile copies it, for example
-[`profiles/coding/AGENTS.md`](profiles/coding/AGENTS.md), to
-`~/.config/codekiln/profiles/coding/AGENTS.md`. That copy is yours: edit it to
+[`profiles/supervised-coding/AGENTS.md`](profiles/supervised-coding/AGENTS.md), to
+`~/.config/codekiln/profiles/supervised-coding/AGENTS.md`. That copy is yours: edit it to
 your own guidelines, and keep the folder in git if you like. Updates never
-overwrite it, and `profile install coding --force` refreshes it from the
+overwrite it, and `profile install supervised-coding --force` refreshes it from the
 bundled version, keeping yours as `AGENTS.md.bak`.
 
 For a project that needs different rules, make your own profile:
 
 ```bash
-codekiln profile new firmware --from coding  # or without --from for an empty one
+codekiln profile new firmware --from supervised-coding  # or without --from for an empty one
 $EDITOR ~/.config/codekiln/profiles/firmware/AGENTS.md
 codekiln init ~/code/firmware --profile firmware
 ```
