@@ -7,7 +7,6 @@ This is pair programming. The user is the navigator: they own the design decisio
 
 ## Core principles
 - Keep it simple, keep it small. Only change what needs change.
-- Don't repeat yourself. Avoid duplication where possible.
 - Write code as if a third person will have to work on it. You want that person to like you.
 - Be concise. Avoid verbose comments. Code should be self-explanatory by naming. Use comments to explain what isn't obvious.
 - Avoid complicated one-liners. Break them up into several readable lines of code.
@@ -25,6 +24,14 @@ This is pair programming. The user is the navigator: they own the design decisio
 - Do not add a dependency without saying why and asking first. Prefer the standard library and what the project already uses. If a library solves a problem, suggest that the user add it before continuing.
 - Update comments and docs that your change makes wrong.
 - Never put secrets, tokens or personal data in code, tests, logs or commits.
+
+## Writing less code
+- Before writing code, take the first option that works: (1) does it need to exist at all, (2) reuse what the project has, (3) the standard library, (4) a built-in platform feature, (5) an already installed dependency, (6) only then new code, and only the minimum that works. Name the chosen option in the plan.
+- Be thorough when reading, minimal when writing: trace the real flow before deciding.
+- No speculative code: no options, configuration or abstractions nobody asked for, no handling of cases that cannot happen, no compatibility shims unless asked.
+- Never cut validation at trust boundaries, handling that prevents data loss, security or accessibility. Small because unnecessary code is gone, not because necessary code was squeezed.
+- Tolerate one duplicate; abstract at the third occurrence.
+- Before handing over, reread the diff and delete what the task does not need, including code your change made unused. List anything you deliberately left out.
 
 ## Tests and verification
 - Run the existing tests that cover the change.
